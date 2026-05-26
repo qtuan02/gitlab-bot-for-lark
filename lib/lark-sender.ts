@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { createHmac } from 'crypto'
 import { NextRequest } from 'next/server'
 
 interface LarkResponse {
@@ -20,31 +21,20 @@ export async function sendToLark(req: NextRequest,message: any): Promise<LarkRes
     
     // Add timestamp for webhook verification if secret is provided
     if (webhookSecret) {
-      
       const timestamp = Math.floor(Date.now() / 1000).toString()
       const sign = generateLarkSignature(timestamp, webhookSecret)
-      
-      console.log("Webhook Secret: ", {webhookSecret,sign,timestamp});
-      
-      // Add signature to headers
-      const headers = {
-        'Content-Type': 'application/json',
-      }
-      
+
       const response = await axios.post(webhookUrl, {
         ...message,
         sign,
         timestamp,
-      }, { headers })
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
       
-      console.log("Susses sending to Lark ", response.status, response.data);
-      
-      return {
-        success: response.status === 200,
-        messageId: response.data?.code === 0 ? response.data?.data?.message_id : undefined,
-        error: response.data?.code !== 0 ? response.data?.msg : undefined,
-        message: response.data?.message
-      }
+      return parseLarkResponse(response)
     } else {
       // Send without signature verification
       const response = await axios.post(webhookUrl, message, {
@@ -53,15 +43,7 @@ export async function sendToLark(req: NextRequest,message: any): Promise<LarkRes
         }
       })
 
-      console.log("Susses sending to Lark ", response.status, response.data);
-      
-      
-      return {
-        success: response.status === 200,
-        messageId: response.data?.code === 0 ? response.data?.data?.message_id : undefined,
-        error: response.data?.code !== 0 ? response.data?.msg : undefined,
-        message: response.data?.message
-      }
+      return parseLarkResponse(response)
     }
     
   } catch (error) {
@@ -73,8 +55,24 @@ export async function sendToLark(req: NextRequest,message: any): Promise<LarkRes
   }
 }
 
+function parseLarkResponse(response: { status: number; data?: { code?: number; msg?: string; data?: { message_id?: string }; message?: string } }): LarkResponse {
+  const ok = response.status === 200 && response.data?.code === 0
+
+  if (!ok) {
+    console.error('Lark webhook error:', response.data)
+  } else {
+    console.log('Success sending to Lark', response.data)
+  }
+
+  return {
+    success: ok,
+    messageId: ok ? response.data?.data?.message_id : undefined,
+    error: ok ? undefined : response.data?.msg,
+    message: response.data?.message
+  }
+}
+
 function generateLarkSignature(timestamp: string, secret: string): string {
-  const crypto = require('crypto')
-  const stringToSign = timestamp + secret
-  return crypto.createHmac('sha256', secret).update(stringToSign).digest('base64')
+  const stringToSign = `${timestamp}\n${secret}`
+  return createHmac('sha256', stringToSign).update('').digest('base64')
 }
